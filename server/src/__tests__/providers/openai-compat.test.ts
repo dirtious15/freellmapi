@@ -1338,6 +1338,10 @@ describe('OpenCode session header (#1639)', () => {
         }),
       } as any;
     });
+    // zen.opencode.ai is a subdomain-match fixture, not a real host; the custom
+    // platform's request-time URL guard resolves it, and a real lookup of a
+    // nonexistent name takes ~10s on some resolvers. Answer it locally.
+    vi.spyOn(dns.promises, 'lookup').mockResolvedValue([{ address: '93.184.216.34', family: 4 }] as any);
     const zen = new OpenAICompatProvider({ platform: 'custom', name: 'OpenCode Go', baseUrl: 'https://zen.opencode.ai/v1' });
     for await (const _chunk of zen.streamChatCompletion('k', [{ role: 'user', content: 'hi' }], 'm')) { /* drain */ }
     expect((global as any).__lastHeaders['x-opencode-session']).toMatch(/^[0-9a-f-]{36}$/);

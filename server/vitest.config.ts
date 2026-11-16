@@ -9,6 +9,7 @@ export default defineConfig({
     // test's fetch mock. Its own tests switch it back on.
     env: { CLOUDFLARE_NEURON_ANALYTICS: '0' },
     include: ['src/__tests__/**/*.test.ts'],
+    setupFiles: ['src/__tests__/helpers/dns-reserved.ts'],
     coverage: {
       enabled: process.env.COVERAGE === '1',
       provider: 'v8',
