@@ -1536,7 +1536,9 @@ proxyRouter.post('/completions', async (req: Request, res: Response) => {
   // Fallback-v2 hedging: the loop aborts this controller (via abortInFlight)
   // when the wall-clock retry budget expires mid-attempt, canceling the
   // in-flight upstream instead of waiting for a stalled attempt to time out.
-  const hedgeAbort = new AbortController();
+  // `let`: abortInFlight aborts only the in-flight attempt and replaces the
+  // controller, so a silent-window failover gets a fresh signal (RC3).
+  let hedgeAbort = new AbortController();
   res.on('close', () => {
     if (!res.writableEnded) {
       clientGone = true;
@@ -1553,7 +1555,8 @@ proxyRouter.post('/completions', async (req: Request, res: Response) => {
     attemptLog,
     logIdentity: { surface: 'legacy completions', requestId: requestGroupId, requestedModel: requestedModelLabel },
     clientGone: () => clientGone,
-    abortInFlight: () => hedgeAbort.abort(newHedgeAbortError()),
+    abortInFlight: () => { hedgeAbort.abort(newHedgeAbortError()); hedgeAbort = new AbortController(); },
+    streaming: stream === true,
     route: () => {
       // #507: see inbound-chat.ts — inflate the routing estimate from any
       // provider-reported REQUESTED size latched onto state so the existing
@@ -1658,6 +1661,8 @@ proxyRouter.post('/completions', async (req: Request, res: Response) => {
             if (ttfbMs === null && (text.length > 0 || reasoning.length > 0)) {
               ttfbMs = Date.now() - start;
             }
+            // RC3: the first upstream token clears the per-attempt silent-window cap.
+            if (text.length > 0 || reasoning.length > 0) ctx.markFirstByte?.();
             const finish = (chunk as any)?.choices?.[0]?.finish_reason;
             if (finish) upstreamFinish = finish;
             // #764: reasoning tokens are real output consumption — count them
@@ -2528,7 +2533,9 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
   // Fallback-v2 hedging: the loop aborts this controller (via abortInFlight)
   // when the wall-clock retry budget expires mid-attempt, canceling the
   // in-flight upstream instead of waiting for a stalled attempt to time out.
-  const hedgeAbort = new AbortController();
+  // `let`: abortInFlight aborts only the in-flight attempt and replaces the
+  // controller, so a silent-window failover gets a fresh signal (RC3).
+  let hedgeAbort = new AbortController();
 
   // Decision routing (#1354): with the 'decision' strategy on, a decision
   // model picks which preset (Smartest / Fastest / Balanced / Most reliable)
@@ -2543,7 +2550,8 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
     attemptLog,
     logIdentity: { surface: 'chat completions', requestId: requestGroupId, requestedModel: requestedModelLabel },
     clientGone: () => clientGone,
-    abortInFlight: () => hedgeAbort.abort(newHedgeAbortError()),
+    abortInFlight: () => { hedgeAbort.abort(newHedgeAbortError()); hedgeAbort = new AbortController(); },
+    streaming: stream === true,
     route: () => {
       // When a handoff could fire this turn, pad the token estimate so the router's
       // context-window and TPM checks account for the extra system message overhead.
@@ -2806,6 +2814,10 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
             if (ttfbMs === null && (text.length > 0 || reasoning.length > 0)) {
               ttfbMs = Date.now() - start;
             }
+            // RC3: any upstream token (text, reasoning or a tool-call delta —
+            // tool calls are held until stream end) proves the attempt alive and
+            // clears the per-attempt silent-window cap.
+            if (text.length > 0 || reasoning.length > 0 || (Array.isArray(choice.delta?.tool_calls) && choice.delta.tool_calls.length > 0)) ctx.markFirstByte?.();
 
             if (text.length === 0) {
               // Role preamble / keep-alive: hold until first payload decides
