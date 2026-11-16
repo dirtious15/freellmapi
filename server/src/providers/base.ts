@@ -436,16 +436,26 @@ export abstract class BaseProvider {
     timeoutMessage?: string,
   ): Promise<T> {
     if (inactivityTimeoutMs <= 0) return read();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    return Promise.race([
-      read(),
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error(timeoutMessage ?? `${this.name} stream stalled: no data for ${inactivityTimeoutMs}ms (timeout)`)),
-          inactivityTimeoutMs,
-        );
-      }),
-    ]).finally(() => clearTimeout(timer));
+    // One Promise + one timer per read (was: read + timeout promise + race +
+    // finally = four promises). The timer is cleared on every settle path.
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(timeoutMessage ?? `${this.name} stream stalled: no data for ${inactivityTimeoutMs}ms (timeout)`)),
+        inactivityTimeoutMs,
+      );
+      let pending: Promise<T>;
+      try {
+        pending = read();
+      } catch (err) {
+        clearTimeout(timer);
+        reject(err);
+        return;
+      }
+      pending.then(
+        (v) => { clearTimeout(timer); resolve(v); },
+        (e) => { clearTimeout(timer); reject(e); },
+      );
+    });
   }
 
   /**
